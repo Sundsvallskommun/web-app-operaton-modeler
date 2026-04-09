@@ -1,0 +1,42 @@
+# Local-development stack for the deployable web-operaton-modeler.
+#
+# Brings up the SPA (frontend, port 3000) + BFF (backend, port 3001) together.
+# Expects api-service-operaton running separately at host:8081 and a SAML IdP
+# (web-app-fake-sso-idp) running at host:7000. Bring those up from their own
+# repos before starting this stack.
+#
+# Usage:
+#   cp backend/.env.example backend/.env  # then fill in CLIENT_KEY/SECRET, SAML cert/key
+#   docker compose up -d --build
+#
+# The workshop demo stack (with mocks, mariadb, caremanagement etc.) lives in
+# the sibling repo `web-operaton-modeler-workshop/`.
+
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: ${COMPOSE_PROJECT_NAME:-operaton-modeler}-backend-${NODE_ENV:-development}
+    restart: unless-stopped
+    ports:
+      - "${BACKEND_PORT:-3001}:3000"
+    env_file:
+      - ./backend/.env
+    # Host networking via "bridge" so localhost:7000 (fake-sso-idp) and
+    # localhost:8081 (api-service-operaton) are reachable from inside the
+    # container, and SAML callback URLs that look like http://localhost:3001
+    # round-trip correctly between IdP, BFF, and browser.
+    network_mode: bridge
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:${BACKEND_PORT:-3001}/api
+    container_name: ${COMPOSE_PROJECT_NAME:-operaton-modeler}-frontend-${NODE_ENV:-development}
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    network_mode: bridge
+    depends_on:
+      - backend
