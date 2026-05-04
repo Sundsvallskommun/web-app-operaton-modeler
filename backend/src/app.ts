@@ -12,7 +12,7 @@ import morgan from 'morgan';
 import passport from 'passport';
 import 'reflect-metadata';
 import createFileStore from 'session-file-store';
-import { Strategy, VerifiedCallback } from '@node-saml/passport-saml';
+import { Strategy, VerifiedCallback, Profile } from '@node-saml/passport-saml';
 import {
   BASE_URL_PREFIX,
   CREDENTIALS,
@@ -32,7 +32,6 @@ import {
   SESSION_MEMORY,
 } from '@config';
 import { errorMiddleware } from '@middlewares/error.middleware';
-import { Profile } from '@interfaces/profile.interface';
 import { User } from '@interfaces/users.interface';
 import { logger, stream } from '@utils/logger';
 import { isValidUrl } from '@utils/util';
@@ -42,13 +41,12 @@ import operatonRouter from '@controllers/operaton.controller';
 
 const corsWhitelist = (ORIGIN || '').split(',').map(o => o.trim());
 
-const SessionStoreCreate = SESSION_MEMORY ? createMemoryStore(session) : createFileStore(session);
 const sessionTTL = 4 * 24 * 60 * 60; // 4 days
-const sessionStore = new SessionStoreCreate(
-  SESSION_MEMORY ? { checkPeriod: sessionTTL * 1000 } : { sessionTTL, path: './data/sessions' },
-);
+const sessionStore = SESSION_MEMORY
+  ? new (createMemoryStore(session))({ checkPeriod: sessionTTL * 1000 })
+  : new (createFileStore(session))({ ttl: sessionTTL, path: './data/sessions' });
 
-passport.serializeUser((user, done) => done(null, user));
+passport.serializeUser((user, done) => done(null, user as Record<string, unknown>));
 passport.deserializeUser((user, done) => done(null, user as Express.User));
 
 const samlStrategy = new Strategy(
@@ -66,24 +64,33 @@ const samlStrategy = new Strategy(
     audience: false,
     logoutCallbackUrl: SAML_LOGOUT_CALLBACK_URL!,
   },
-  async (profile: Profile, done: VerifiedCallback) => {
+  // signonVerify — VerifyWithoutRequest: (profile | null, done) => void.
+  // Parameter type is annotated explicitly so TypeScript picks the 2-arg
+  // overload instead of inferring the 3-arg (req, profile, done) one.
+  // SAML attributes come through as `unknown` via Profile's index signature,
+  // so each one needs a `typeof` narrow before use.
+  (profile: Profile | null, done: VerifiedCallback) => {
     if (!profile) {
       return done({ name: 'SAML_MISSING_PROFILE', message: 'Missing SAML profile' });
     }
-    const { username, givenName, surname, userId } = profile;
+    const givenName = typeof profile.givenName === 'string' ? profile.givenName : undefined;
+    const surname = typeof profile.surname === 'string' ? profile.surname : undefined;
+    const userId = typeof profile.userId === 'string' ? profile.userId : undefined;
+    const username = typeof profile.username === 'string' ? profile.username : undefined;
     if (!givenName || !surname || !userId) {
       return done({ name: 'SAML_MISSING_ATTRIBUTES', message: 'Missing profile attributes' });
     }
     const user: User = {
-      userId: typeof userId === 'string' ? userId : undefined,
-      username: typeof username === 'string' ? username : undefined,
+      userId,
+      username,
       name: `${givenName} ${surname}`,
       givenName,
       surname,
     };
-    done(null, user);
+    done(null, user as unknown as Record<string, unknown>);
   },
-  async (_profile: Profile, done: VerifiedCallback) => done(null, {}),
+  // logoutVerify — same signature; we don't run any extra work on SLO, just accept.
+  (_profile: Profile | null, done: VerifiedCallback) => done(null, {}),
 );
 
 export class App {
